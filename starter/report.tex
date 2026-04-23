@@ -1,0 +1,115 @@
+\documentclass[10pt]{article}
+\usepackage[a4paper,margin=0.65in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{hyperref}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  urlcolor=blue
+}
+
+\setlength{\parskip}{0.35em}
+\setlength{\parindent}{0pt}
+
+\begin{document}
+
+\begin{center}
+{\Large Cache-Friendly Graph Processing Report}
+\end{center}
+
+\textbf{Experimental setup.}
+I used the provided \texttt{graph\_bench} program without modifying the driver files. The code was compiled inside WSL with \texttt{gcc -O2 -std=gnu11 -Wall -Wextra -pedantic}. Benchmark graphs were generated using the provided script:
+\begin{itemize}
+\item \texttt{python3 scripts/gen\_graph.py --kind er --n 10000 --deg 8 --seed 1 --out data/er\_10k\_deg8\_s1.txt}
+\item \texttt{python3 scripts/gen\_graph.py --kind er --n 50000 --deg 8 --seed 2 --out data/er\_50k\_deg8\_s2.txt}
+\end{itemize}
+These are directed Erd\H{o}s-R\'enyi style graphs with average out-degree 8, so BFS from vertex \texttt{0} does not necessarily reach every vertex. For runtime, I ran each case three times and report the median wall-clock time. For Cachegrind, I kept the graph, source, repeat count, and binary fixed across runs so that only the cache model changed.
+
+One important caveat is that the provided benchmark measures the whole path inside \texttt{run\_benchmark}: graph loading for both implementations and CSR conversion for the CSR path. To reduce the effect of one-time setup, I used higher repeat counts so that traversal dominates the total cost.
+
+\textbf{1. Runtime comparison.}
+The CSR implementation was faster on both tested graph sizes.
+
+\begin{center}
+\begin{tabular}{>{\raggedright\arraybackslash}p{1.55in}r>{\raggedright\arraybackslash}p{1.0in}>{\raggedright\arraybackslash}p{1.0in}rrr}
+\toprule
+Graph & Repeats & Pointer runs & CSR runs & Median pointer & Median CSR & Speedup \\
+\midrule
+\texttt{n=10000, deg=8, seed=1} & 100 & \texttt{85.46, 76.14, 81.74} & \texttt{50.88, 49.35, 48.76} & \texttt{81.74 ms} & \texttt{49.35 ms} & \texttt{1.66x} \\
+\texttt{n=50000, deg=8, seed=2} & 20 & \texttt{175.71, 182.60, 191.74} & \texttt{87.34, 67.97, 75.37} & \texttt{182.60 ms} & \texttt{75.37 ms} & \texttt{2.42x} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Per BFS, the median times are \texttt{0.817 ms} versus \texttt{0.494 ms} on the 10k graph, and \texttt{9.13 ms} versus \texttt{3.77 ms} on the 50k graph. The speedup grows with graph size because CSR keeps neighbor data packed together while the pointer graph performs many scattered memory accesses.
+
+\textbf{2. Cache behavior.}
+For the main Cachegrind comparison, I used the larger graph and the following configuration:
+
+\texttt{valgrind --tool=cachegrind --D1=32768,8,64 ./graph\_bench ... --repeat=100}
+
+\begin{center}
+\begin{tabular}{lrrrr}
+\toprule
+Implementation & D1 misses & LLd misses & D1 miss rate & LLd miss rate \\
+\midrule
+Pointer & \texttt{68,078,892} & \texttt{16,919,568} & \texttt{19.5\%} & \texttt{4.8\%} \\
+CSR & \texttt{51,209,989} & \texttt{753,402} & \texttt{14.2\%} & \texttt{0.2\%} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+CSR produces about \texttt{24.8\%} fewer D1 misses and about \texttt{95.5\%} fewer LLd misses. This strongly supports the runtime results: both implementations do the same BFS algorithm, but CSR causes far fewer expensive data-cache misses.
+
+\textbf{3. Why CSR performs better.}
+The key difference is memory layout. In the pointer graph, each adjacency list is a linked list of heap-allocated \texttt{Edge} nodes. BFS repeatedly follows \texttt{edge->next}, and those nodes may be far apart in memory. That causes pointer chasing and weak spatial locality.
+
+In CSR, each vertex's neighbors are stored in one compact slice of \texttt{col\_idx}, and \texttt{row\_ptr} gives the slice boundaries. BFS therefore scans contiguous integers instead of chasing pointers. This improves spatial locality, helps hardware prefetching, reduces pointer overhead, and allows each fetched cache line to contain more useful neighbor data.
+
+\textbf{4. Varying cache parameters.}
+I repeated the Cachegrind run on the same 50k graph while varying one L1 data-cache parameter at a time.
+
+\textit{Cache size.} Comparing \texttt{16 KB, 8-way, 64 B} with \texttt{32 KB, 8-way, 64 B}:
+\begin{itemize}
+\item Pointer D1 misses: \texttt{70,094,031} $\rightarrow$ \texttt{68,078,892} (\texttt{-2.9\%})
+\item CSR D1 misses: \texttt{53,824,143} $\rightarrow$ \texttt{51,209,989} (\texttt{-4.9\%})
+\item Pointer LLd misses: \texttt{16,919,660} $\rightarrow$ \texttt{16,919,568}
+\item CSR LLd misses: \texttt{753,402} $\rightarrow$ \texttt{753,402}
+\end{itemize}
+Increasing cache size helps both versions only modestly. A larger L1 captures some short-term reuse, but it does not fix the poor locality of linked lists.
+
+\textit{Associativity.} Comparing \texttt{32 KB, 2-way, 64 B} with \texttt{32 KB, 8-way, 64 B}:
+\begin{itemize}
+\item Pointer D1 misses: \texttt{68,133,897} $\rightarrow$ \texttt{68,078,892}
+\item CSR D1 misses: \texttt{51,277,734} $\rightarrow$ \texttt{51,209,989}
+\end{itemize}
+The effect is tiny, so conflict misses are not the main bottleneck here. The main issue is locality rather than set contention.
+
+\textit{Cache line size.} At fixed \texttt{32 KB} and \texttt{8-way}:
+\begin{itemize}
+\item Pointer D1 misses: \texttt{86,235,233} at \texttt{32 B}, \texttt{68,078,892} at \texttt{64 B}, \texttt{57,539,453} at \texttt{128 B}
+\item CSR D1 misses: \texttt{56,077,999} at \texttt{32 B}, \texttt{51,209,989} at \texttt{64 B}, \texttt{48,780,050} at \texttt{128 B}
+\item Pointer LLd misses: \texttt{16,919,588}, \texttt{16,919,568}, \texttt{7,449,487}
+\item CSR LLd misses: \texttt{753,439}, \texttt{753,402}, \texttt{392,633}
+\end{itemize}
+Larger cache lines help both implementations because more nearby data arrives per miss. CSR benefits more structurally because consecutive entries in \texttt{col\_idx} are usually consumed immediately. Pointer BFS also improves, but it still follows \texttt{next} pointers to unrelated heap nodes, so it remains much less cache-friendly overall.
+
+\textbf{Cachegrind pitfalls.}
+There are several easy ways to misinterpret these experiments:
+\begin{itemize}
+\item Cachegrind is for miss statistics, not native runtime comparison. Wall-clock time under Valgrind is heavily distorted.
+\item The provided benchmark includes setup work, especially CSR conversion. Using a low repeat count can unfairly penalize CSR.
+\item The comparison is only meaningful if graph file, source vertex, repeat count, compiler flags, and binary are held constant.
+\item Miss counts are usually more informative than rates alone because they show the true scale of the memory-traffic difference.
+\item These numbers describe the whole benchmark path in the provided driver, not a perfectly isolated BFS kernel.
+\end{itemize}
+
+\textbf{Conclusion.}
+The assignment demonstrates that asymptotically identical algorithms can behave very differently because of data layout. CSR is consistently faster than the pointer-based graph, produces fewer L1 data misses, and dramatically reduces costly last-level data misses. Larger caches help only a little, associativity matters very little, and larger cache lines help both implementations, with CSR remaining the more cache-friendly design throughout.
+
+\end{document}
