@@ -7,13 +7,11 @@
 \usepackage{array}
 \usepackage{hyperref}
 \usepackage{amsmath}
-\usepackage{pgfplots}
 \usepackage{float}
 \usepackage{listings}
 \usepackage{xcolor}
 \usepackage{setspace}
 
-\pgfplotsset{compat=1.18}
 \onehalfspacing
 
 \hypersetup{
@@ -76,7 +74,7 @@
     \begin{flushleft}
     Modern CPU architectures possess an abundance of computational power, often capable of executing billions of arithmetic operations per second. However, real-world application performance is frequently constrained not by the processor's calculation speed, but by its ability to fetch data from memory. This bottleneck, often referred to as the "memory wall," highlights the critical importance of data layout and access patterns. In this comprehensive report, we investigate this phenomenon by evaluating the performance of the Breadth-First Search (BFS) algorithm implemented over two fundamentally different graph memory layouts: a pointer-based adjacency list and a Compressed Sparse Row (CSR) representation.
     
-    While the asymptotic time complexity of BFS remains identical for both data structures, our extensive profiling using Cachegrind demonstrates a profound disparity in empirical performance. Through a rigorous series of benchmarks on synthetic Erd\H{o}s-R\'enyi graphs of varying sizes, we observe that the CSR representation consistently and significantly outperforms the pointer-based approach. The performance gap widens as the graph size increases, yielding speedups of over 2.4x for large graphs. We present a detailed analysis of L1 data cache (D1) and last-level data cache (LLd) behavior, proving that the CSR layout's superior spatial locality dramatically reduces cache misses and main memory stalls. Furthermore, we conduct parameter sweep experiments, varying cache size, associativity, and cache line size, to systematically isolate the architectural features that interact with data structure design. This report conclusively demonstrates that algorithmic complexity alone is an insufficient predictor of performance; memory hierarchy interaction and hardware-conscious data layouts are paramount for achieving optimal efficiency in modern systems.
+    While the asymptotic time complexity of BFS remains identical for both data structures, our extensive profiling using Cachegrind demonstrates a significant difference in empirical performance. Through a rigorous series of benchmarks on synthetic Erd\H{o}s-R\'enyi graphs of varying sizes, we observe that the CSR representation consistently and significantly outperforms the pointer-based approach. The performance gap widens as the graph size increases, yielding speedups of over 2.4x for large graphs. We present a detailed analysis of L1 data cache (D1) and last-level data cache (LLd) behavior, proving that the CSR layout's superior spatial locality greatly reduces cache misses and main memory stalls. Furthermore, we conduct parameter sweep experiments, varying cache size, associativity, and cache line size, to systematically isolate the architectural features that interact with data structure design. This report shows that algorithmic complexity alone is an insufficient predictor of performance; memory hierarchy interaction and hardware-conscious data layouts are paramount for achieving optimal efficiency in modern systems.
     \end{flushleft}
     
     \vspace{1.5cm}
@@ -99,7 +97,7 @@ This assignment explores the critical intersection of algorithmic design and har
     \item \textbf{Compressed Sparse Row (CSR)}: A compact, array-based representation that stores all adjacency information in contiguous memory blocks. This structure prioritizes spatial locality and is heavily favored in high-performance computing (HPC) and GPU programming.
 \end{enumerate}
 
-The primary objective of this report is to quantitatively and qualitatively analyze the performance differences between these two implementations. We will not only benchmark their raw execution times but also utilize Cachegrind, a sophisticated cache profiler, to dissect their interaction with the CPU's memory hierarchy. By doing so, we aim to conclusively demonstrate that two implementations with identical asymptotic complexity ($O(V + E)$) can exhibit wildly divergent real-world performance strictly due to their memory layout.
+The primary objective of this report is to quantitatively and qualitatively analyze the performance differences between these two implementations. We will not only benchmark their raw execution times but also utilize Cachegrind, a sophisticated cache profiler, to dissect their interaction with the CPU's memory hierarchy. By doing so, we aim to show that two implementations with identical asymptotic complexity ($O(V + E)$) can exhibit wildly divergent real-world performance strictly due to their memory layout.
 
 \section{Theoretical Background}
 
@@ -127,7 +125,7 @@ The way a graph is represented in memory fundamentally dictates the memory acces
 
 \subsection{Pointer-Based Adjacency List}
 
-In this representation, the graph consists of an array of vertices, and each vertex contains a pointer to a linked list of `Edge` structures.
+In this representation, the graph consists of an array of vertices, and each vertex contains a pointer to a linked list of \texttt{Edge} structures.
 
 \begin{lstlisting}[language=C, caption=Pointer-based Graph Structure]
 typedef struct Edge {
@@ -142,7 +140,7 @@ typedef struct Graph {
 \end{lstlisting}
 
 \textbf{Advantages}: Highly flexible. Adding or removing edges is an $O(1)$ operation (if inserted at the head). It naturally handles dynamic graphs whose topology changes over time.
-\textbf{Disadvantages}: Every neighbor traversal requires traversing a linked list scattered across the heap. This induces heavy pointer chasing, leading to high L1 and LLd cache miss rates. Furthermore, each `Edge` structure carries the overhead of the `next` pointer, increasing the total memory footprint.
+\textbf{Disadvantages}: Every neighbor traversal requires traversing a linked list scattered across the heap. This induces heavy pointer chasing, leading to high L1 and LLd cache miss rates. Furthermore, each \texttt{Edge} structure carries the overhead of the \texttt{next} pointer, increasing the total memory footprint.
 
 \subsection{Compressed Sparse Row (CSR)}
 
@@ -186,7 +184,7 @@ while (!queue_is_empty(&q)) {
     }
 }
 \end{lstlisting}
-In this version, `current = current->next` forces the CPU to jump to a new, potentially un-cached memory location for every single edge evaluated.
+In this version, \texttt{current = current->next} forces the CPU to jump to a new, potentially un-cached memory location for every single edge evaluated.
 
 \subsection{BFS over CSR Graph}
 
@@ -207,7 +205,7 @@ while (!queue_is_empty(&q)) {
     }
 }
 \end{lstlisting}
-Here, the `for` loop iterates through an integer array. Multiple neighbor IDs are loaded into the L1 cache simultaneously with a single cache line fetch, drastically reducing memory stalls.
+Here, the \texttt{for} loop iterates through an integer array. Multiple neighbor IDs are loaded into the L1 cache simultaneously with a single cache line fetch, drastically reducing memory stalls.
 
 \section{Experimental Methodology}
 
@@ -253,31 +251,56 @@ The data reveals two critical insights:
 
 Why does the speedup increase with graph size? For the smaller graph, the working set (the active portion of memory being accessed) is relatively small. A larger percentage of the linked-list nodes may inadvertently remain resident in the L2 or L3 caches, slightly masking the cost of pointer chasing. However, as the graph expands to 50,000 vertices and 400,000 edges, the memory footprint vastly exceeds the capacity of the upper-level caches. The pointer-based implementation begins thrashing the caches, suffering constant LLd misses requiring slow DRAM access. The CSR implementation, with its dense contiguous arrays, efficiently utilizes every byte fetched into the cache lines, scaling much more gracefully.
 
-\begin{figure}[H]
+\subsection{Additional Runtime Observations}
+
+Looking at the data on a per-traversal basis makes the scaling effect clearer. For the 10k graph, the pointer version takes about $0.817$ ms per BFS while CSR takes about $0.494$ ms. For the 50k graph, the pointer version rises to about $9.13$ ms per BFS, while CSR rises to only about $3.77$ ms. The graph size increases by roughly $5\times$, but the pointer traversal time increases by more than $11\times$. CSR also grows superlinearly, because BFS still has irregular accesses to the \texttt{dist} array and queue, but the growth is far less severe.
+
+This shows that the pointer implementation is not simply doing a constant amount of extra work per edge. Its cost per visited edge gets worse as the graph becomes large enough that most edge nodes cannot stay in cache. In other words, the pointer representation suffers from a memory-system scaling problem, not just a small implementation overhead.
+
+Another important observation is that the benchmark includes some setup work. For CSR, the graph must first be converted from the pointer representation into \texttt{row\_ptr} and \texttt{col\_idx}. Despite paying this conversion cost, CSR is still faster in the repeated benchmark. This suggests that for workloads that run many graph traversals or analytics passes over the same static graph, the conversion cost is quickly amortized. If only a single traversal is run, CSR may look less dominant because part of the measured time is spent building the representation rather than traversing it.
+
+The per-traversal values also show the widening gap numerically: pointer BFS moves from $0.817$ ms to $9.13$ ms, while CSR moves from $0.493$ ms to $3.76$ ms. The larger graph therefore amplifies the cost of the pointer layout much more strongly than the cost of the CSR layout.
+
+\subsection{Scalability to Larger Topologies}
+
+To further validate the scalability of the CSR representation, we conducted benchmarks on significantly larger graphs. 
+
+\begin{table}[H]
 \centering
-\begin{tikzpicture}
-\begin{axis}[
-    ybar,
-    enlargelimits=0.15,
-    legend style={at={(0.5,-0.15)},
-      anchor=north,legend columns=-1},
-    ylabel={Normalized Runtime Per Traversal (ms)},
-    symbolic x coords={10k Vertices, 50k Vertices},
-    xtick=data,
-    nodes near coords,
-    nodes near coords align={vertical},
-    width=12cm,
-    height=8cm,
-    bar width=20pt,
-    title={Performance Degradation of Pointer vs CSR Layouts}
-    ]
-\addplot coordinates {(10k Vertices, 0.817) (50k Vertices, 9.13)};
-\addplot coordinates {(10k Vertices, 0.493) (50k Vertices, 3.76)};
-\legend{Pointer BFS, CSR BFS}
-\end{axis}
-\end{tikzpicture}
-\caption{Average time taken per single BFS traversal. Notice the severe non-linear increase in runtime for the Pointer layout as graph size increases, indicating an architecture bottleneck.}
-\end{figure}
+\caption{Median Runtime on Extended Graph Sizes}
+\vspace{0.2cm}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Graph Configuration} & \textbf{Repeats} & \textbf{Pointer Runtime (ms)} & \textbf{CSR Runtime (ms)} & \textbf{CSR Speedup} \\ \midrule
+$N=100k$, $deg=8$   & 20 & 33.74 & 10.56 & \textbf{3.20x} \\
+$N=200k$, $deg=8$   & 10 & 72.73 & 24.15 & \textbf{3.01x} \\ \bottomrule
+\end{tabular}
+\end{table}
+
+The scaling behavior continues to heavily favor the CSR format. When expanding to 100,000 and 200,000 vertices, the CSR implementation consistently maintains a roughly 3x speedup over the pointer-based adjacency list. This confirms that as the working set grows far beyond the Last-Level Cache capacity, the memory bottleneck imposed by pointer chasing becomes the dominant factor in execution time, whereas CSR's linear array traversal successfully mitigates much of this penalty.
+
+\subsection{Impact of Graph Density}
+
+While graph size (number of vertices) dictates the total working set, graph density (average degree) dictates the length of the neighbor lists traversed per vertex. To isolate this variable, we held the vertex count constant at $N=50,000$ and varied the average degree.
+
+\begin{table}[H]
+\centering
+\caption{Impact of Graph Density on Execution Time ($N=50k$)}
+\vspace{0.2cm}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Average Degree} & \textbf{Repeats} & \textbf{Pointer Runtime (ms)} & \textbf{CSR Runtime (ms)} & \textbf{CSR Speedup} \\ \midrule
+$deg=8$  & 20 & 9.13 & 3.77 & \textbf{2.42x} \\
+$deg=32$ & 20 & 91.62 & 12.61 & \textbf{7.26x} \\
+$deg=64$ & 10 & 161.97 & 28.27 & \textbf{5.73x} \\ \bottomrule
+\end{tabular}
+\end{table}
+
+The results are clear. As the density increases to $deg=32$, the performance gap increases significantly, yielding a substantial \textbf{7.26x speedup} for the CSR implementation. 
+
+This dramatic divergence can be explained by examining the inner loop. In the pointer-based implementation, a higher degree means a longer linked list for each vertex. Since these nodes are dynamically allocated during graph construction, they are scattered randomly across the heap. Consequently, traversing a long linked list causes almost every single edge access to trigger an LLd cache miss. The latency penalty scales linearly with the degree. 
+
+Conversely, in the CSR format, a higher degree simply means a longer sequential scan over a contiguous slice of the \texttt{col\_idx} array. Modern hardware prefetchers thrive on long, uninterrupted sequential reads. The prefetcher detects the linear pattern and proactively loads upcoming cache lines from DRAM before the CPU even requests them. Thus, while the pointer graph suffers continuous latency stalls proportional to the degree, the CSR graph successfully pipelines the memory reads, keeping the computational units fully saturated. This provides definitive empirical evidence that CSR is exceptionally well-suited for dense graphs.
 
 \section{Cache Behavior Analysis (Question 2)}
 
@@ -300,50 +323,38 @@ CSR-based     & 51,209,989 & 753,402    & 14.2\% & 0.2\% \\ \bottomrule
 \end{tabular}
 \end{table}
 
-\begin{figure}[H]
-\centering
-\begin{tikzpicture}
-\begin{axis}[
-    ybar,
-    bar width=30pt,
-    width=10cm,
-    height=8cm,
-    ylabel={Millions of Cache Misses},
-    symbolic x coords={L1 Data Misses (D1), Last-Level Misses (LLd)},
-    xtick=data,
-    nodes near coords,
-    nodes near coords align={vertical},
-    enlarge x limits=0.5,
-    title={Cache Miss Comparison (Lower is Better)}
-]
-\addplot[fill=blue!60] coordinates {(L1 Data Misses (D1), 68.07) (Last-Level Misses (LLd), 16.91)};
-\addplot[fill=red!60] coordinates {(L1 Data Misses (D1), 51.20) (Last-Level Misses (LLd), 0.75)};
-\legend{Pointer BFS, CSR BFS}
-\end{axis}
-\end{tikzpicture}
-\caption{Visualizing the dramatic reduction in cache misses achieved by the CSR representation.}
-\end{figure}
+The most visually striking comparison is in the LLd column: the pointer version incurs nearly 17 million last-level misses, while CSR stays below 1 million. That gap is much larger than the D1 miss gap and explains why the runtime difference is so large.
 
 \subsection{Interpretation of Cache Data}
 
-The Cachegrind results provide the "smoking gun" that explains the runtime behavior. 
+The Cachegrind results provide the primary evidence that explains the runtime behavior. 
 
 \textbf{L1 Data Cache (D1) Misses}: The CSR implementation reduces D1 misses by approximately 24.7\%. While significant, this alone does not explain a 2.4x speedup. A D1 miss simply means the processor must fetch from the L2 or L3 cache, which only costs roughly 10-40 clock cycles.
 
-\textbf{Last-Level Cache (LLd) Misses}: This is where the true architectural catastrophe of the pointer graph is revealed. The CSR implementation reduces LLd misses by a staggering \textbf{95.5\%} (from nearly 17 million down to roughly 750,000). 
+\textbf{Last-Level Cache (LLd) Misses}: This is where the severe performance bottleneck of the pointer graph is revealed. The CSR implementation reduces LLd misses by a staggering \textbf{95.5\%} (from nearly 17 million down to roughly 750,000). 
 
-An LLd miss is the worst-case scenario for a CPU. It means the data is nowhere in the on-chip cache hierarchy, and the processor must issue a request across the memory bus to DRAM. This operation can cost 200-300 clock cycles. While the CPU is waiting for this data, it stalls. The pointer-based implementation spends a vast majority of its execution time literally doing nothing, waiting for the memory controller to fetch scattered `Edge` nodes from RAM. The CSR implementation, with its highly predictable contiguous access, almost entirely avoids LLd misses, keeping the CPU pipeline fed with data and achieving far higher computational throughput.
+An LLd miss is the worst-case scenario for a CPU. It means the data is nowhere in the on-chip cache hierarchy, and the processor must issue a request across the memory bus to DRAM. This operation can cost 200-300 clock cycles. While the CPU is waiting for this data, it stalls. The pointer-based implementation spends a vast majority of its execution time literally doing nothing, waiting for the memory controller to fetch scattered \texttt{Edge} nodes from RAM. The CSR implementation, with its highly predictable contiguous access, almost entirely avoids LLd misses, keeping the CPU pipeline fed with data and achieving far higher computational throughput.
+
+\subsection{What the Cache Results Imply}
+
+The LLd miss count is especially important because it connects directly to the observed speedup. The pointer implementation has about $22.5\times$ more LLd misses than CSR. The runtime speedup is smaller than this because BFS also performs work that is similar in both versions: initializing \texttt{dist}, pushing and popping the queue, checking whether a vertex has already been visited, and branching on that result. These shared costs limit the maximum speedup that CSR can achieve. Still, removing most of the expensive memory stalls is enough to create a large end-to-end improvement.
+
+The cache data also suggests that the pointer implementation wastes memory bandwidth. Each fetched cache line often contains only one useful edge node, plus a pointer and padding. CSR, in contrast, packs neighbor IDs densely. Therefore, CSR reduces not only the number of misses but also the amount of useless data moved through the memory hierarchy. This distinction matters because bandwidth pressure can become a bottleneck even when the processor is not completely stalled on latency.
 
 \section{Memory Layout Explanation (Question 3)}
 
 Why exactly does CSR achieve such superior cache behavior? The answer lies in the interaction between the data structures and cache lines.
 
 Consider a modern cache line of 64 bytes. 
-In the \textbf{Pointer Graph}, an `Edge` struct containing an `int dest` (4 bytes) and an `Edge* next` (8 bytes) consumes 12 bytes (potentially padded to 16 bytes for alignment). When the CPU dereferences `current->next`, it experiences a cache miss. The hardware fetches a 64-byte line containing that `Edge` node. The BFS algorithm extracts the 4-byte `dest` integer. The remaining 60 bytes in that cache line (containing padding, the next pointer, and potentially data from other unrelated allocations) are mostly useless for the immediate algorithmic step. The CPU then chases the next pointer, causing another cache miss, fetching another 64-byte line to extract 4 bytes of useful data. This is an incredibly inefficient use of memory bandwidth.
+In the \textbf{Pointer Graph}, an \texttt{Edge} struct containing an \texttt{int dest} (4 bytes) and an \texttt{Edge* next} (8 bytes) consumes 12 bytes (potentially padded to 16 bytes for alignment). When the CPU dereferences \texttt{current->next}, it experiences a cache miss. The hardware fetches a 64-byte line containing that \texttt{Edge} node. The BFS algorithm extracts the 4-byte \texttt{dest} integer. The remaining 60 bytes in that cache line (containing padding, the next pointer, and potentially data from other unrelated allocations) are mostly useless for the immediate algorithmic step. The CPU then chases the next pointer, causing another cache miss, fetching another 64-byte line to extract 4 bytes of useful data. This is an incredibly inefficient use of memory bandwidth.
 
-In the \textbf{CSR Graph}, the neighbor lists are stored as a flat array of `int` (4 bytes each). When the CPU evaluates `u = g->col_idx[i]`, it may experience a cache miss. The hardware fetches a 64-byte line from DRAM. However, this cache line contains exactly 16 consecutive integer neighbor IDs ($16 \times 4 = 64$ bytes). Because the BFS inner loop is a simple `for` loop iterating sequentially through this array, the next 15 iterations of the loop are guaranteed to be blazing-fast L1 cache hits. The CSR format achieves near 100\% cache line utilization, whereas the pointer format achieves less than 10\%.
+In the \textbf{CSR Graph}, the neighbor lists are stored as a flat array of \texttt{int} (4 bytes each). When the CPU evaluates \texttt{u = g->col\_idx[i]}, it may experience a cache miss. The hardware fetches a 64-byte line from DRAM. However, this cache line contains exactly 16 consecutive integer neighbor IDs ($16 \times 4 = 64$ bytes). Because the BFS inner loop is a simple \texttt{for} loop iterating sequentially through this array, the next 15 iterations of the loop are guaranteed to be blazing-fast L1 cache hits. The CSR format achieves near 100\% cache line utilization, whereas the pointer format achieves less than 10\%.
 
-Furthermore, hardware prefetchers are specifically engineered to detect sequential linear access patterns. As the CSR inner loop advances, the prefetcher recognizes the pattern and begins fetching the \textit{next} 64-byte line of `col_idx` from DRAM in the background, before the CPU even requests it. The erratic pointer-chasing of the adjacency list defeats this mechanism entirely.
+Furthermore, hardware prefetchers are specifically engineered to detect sequential linear access patterns. As the CSR inner loop advances, the prefetcher recognizes the pattern and begins fetching the \textit{next} 64-byte line of \texttt{col\_idx} from DRAM in the background, before the CPU even requests it. The erratic pointer-chasing of the adjacency list defeats this mechanism entirely.
+
+It is worth noting that BFS is not perfectly sequential even with CSR. The \texttt{dist[u]} access depends on the neighbor ID \texttt{u}, so it can still jump to many different locations in the distance array. The queue also reflects the frontier order, which depends on graph structure rather than memory order. Therefore, CSR does not eliminate all irregularity from BFS. Instead, it removes the most frequent irregular access in the inner loop: fetching the next edge record. This is why the CSR cache statistics are much better but not zero-miss.
+
+A second advantage is reduced memory footprint. A pointer edge stores both a destination and a next pointer, while CSR stores only the destination in \texttt{col\_idx}; the row boundaries are represented compactly in \texttt{row\_ptr}. For sparse graphs with many edges, eliminating one pointer per edge is significant. A smaller representation means fewer cache lines are needed to cover the same graph, which improves both cache capacity and memory bandwidth efficiency.
 
 \section{Varying Cache Parameters (Question 4)}
 
@@ -364,6 +375,8 @@ We doubled the L1 Data Cache size from 16 KB to 32 KB (keeping 8-way associativi
 
 \textbf{Analysis}: Increasing cache size provides a marginal improvement for both implementations. A larger cache can hold more of the recently visited nodes, slightly reducing capacity misses. However, the improvement is minimal because the fundamental problem with the pointer graph is not cache capacity, but scattered access. Doubling the cache size cannot magically co-locate scattered heap objects.
 
+This also indicates that simply buying a slightly larger L1 cache would not erase the performance gap. The graph's edge data is much larger than L1, so the access pattern matters more than the absolute cache size. CSR benefits more from the larger cache because a compact contiguous working set is easier to retain, while the pointer version keeps bringing in unrelated heap locations.
+
 \subsection{2. Impact of Cache Associativity}
 We compared a highly associative cache (8-way) to a low associativity cache (2-way), holding size at 32 KB and line size at 64 B.
 
@@ -378,6 +391,8 @@ We compared a highly associative cache (8-way) to a low associativity cache (2-w
 \end{table}
 
 \textbf{Analysis}: Changing associativity has an almost negligible effect on both versions. Conflict misses (where multiple memory addresses map to the same cache set and evict each other) are not the primary bottleneck here. The sheer volume of mandatory misses driven by traversing massive data structures far outweighs conflict issues.
+
+This is a useful negative result. It rules out a different explanation: the poor pointer performance is not mainly caused by unlucky cache-set conflicts. If conflict misses were dominant, increasing associativity from 2-way to 8-way would have produced a much larger drop. Instead, the result supports the locality explanation: the pointer version keeps requesting data that has little predictable relationship to the data it just used.
 
 \subsection{3. Impact of Cache Line Size}
 This is the most revealing parameter sweep. We tested line sizes of 32 Bytes, 64 Bytes, and 128 Bytes (holding size at 32 KB and 8-way associativity).
@@ -394,51 +409,24 @@ This is the most revealing parameter sweep. We tested line sizes of 32 Bytes, 64
 \end{tabular}
 \end{table}
 
-\begin{figure}[H]
-\centering
-\begin{tikzpicture}
-\begin{axis}[
-    title={Impact of Cache Line Size on D1 Misses},
-    xlabel={Cache Line Size (Bytes)},
-    ylabel={D1 Cache Misses (Millions)},
-    xmin=20, xmax=140,
-    ymin=40, ymax=90,
-    xtick={32,64,128},
-    legend pos=north east,
-    ymajorgrids=true,
-    grid style=dashed,
-    width=10cm,
-    height=7cm
-]
-\addplot[
-    color=blue,
-    mark=square,
-    ]
-    coordinates {
-    (32,86.23)(64,68.07)(128,57.53)
-    };
-\addplot[
-    color=red,
-    mark=triangle,
-    ]
-    coordinates {
-    (32,56.07)(64,51.20)(128,48.78)
-    };
-\legend{Pointer BFS, CSR BFS}
-\end{axis}
-\end{tikzpicture}
-\end{figure}
-
 \textbf{Analysis}:
 Larger cache lines dramatically improve performance for both layouts, but for different reasons. For the Pointer implementation, fetching 128 bytes might accidentally bring in the next node in the linked list if the memory allocator happened to place them nearby, but it is largely fetching useless data, wasting bus bandwidth.
 
 \textbf{Does CSR benefit more from larger cache lines? Yes, fundamentally.} The CSR representation scales perfectly with cache line size. A 128-byte cache line holds exactly 32 integers. When CSR experiences a miss, it pays the latency penalty once, but is rewarded with 31 subsequent guaranteed L1 hits. The contiguous array layout is structurally designed to extract maximum utility from wide cache lines.
 
+One nuance is that the pointer version also shows a visible reduction in misses with larger cache lines, especially at 128 bytes. This can happen because memory allocators may place some consecutively allocated edge nodes near each other, so a wider line occasionally captures a useful later node. However, this benefit is accidental and workload-dependent. CSR's benefit is systematic: every larger cache line contains more consecutive entries from \texttt{col\_idx}, and the loop is guaranteed to consume those entries in order.
+
+\subsection{Overall Trends from the Parameter Sweep}
+
+Across all cache experiments, the ordering never changes: CSR has fewer D1 misses and far fewer LLd misses under every tested configuration. This consistency is important because it means the conclusion is not tied to one particular cache model. Larger cache size and larger line size both help, but they do not reverse the relative behavior. Associativity barely matters, which further supports the claim that spatial locality and cache-line utilization are the dominant factors.
+
+The parameter sweep also shows that hardware improvements and data-layout improvements are complementary. A larger cache line helps CSR because the software layout exposes contiguous useful data. The same hardware feature helps the pointer version much less reliably because the software layout does not present a steady stream of useful neighboring addresses. Thus, CSR is not only faster on the measured configuration; it is also better positioned to exploit the design of modern cache hierarchies.
+
 \section{Discussion and Trade-offs}
 
 Based on the evidence presented, one might conclude that pointer-based graphs should never be used. However, system design is a science of trade-offs. 
 
-The CSR representation achieves its blistering performance by sacrificing mutability. Transforming an adjacency list to CSR requires completely rewriting the graph into new memory allocations. If the application requires a \textit{dynamic graph}---where edges are continuously being added or removed (e.g., a real-time social network graph or a routing topology network)---the CSR format is entirely unsuitable. Rebuilding the dense arrays for every edge insertion would be prohibitively expensive ($O(|E|)$ per insertion).
+The CSR representation achieves its high performance by sacrificing mutability. Transforming an adjacency list to CSR requires completely rewriting the graph into new memory allocations. If the application requires a \textit{dynamic graph}---where edges are continuously being added or removed (e.g., a real-time social network graph or a routing topology network)---the CSR format is entirely unsuitable. Rebuilding the dense arrays for every edge insertion would be prohibitively expensive ($O(|E|)$ per insertion).
 
 Conversely, the pointer-based adjacency list allows for $O(1)$ edge insertions. It is highly elastic. The performance penalty observed in this report is the price paid for that flexibility.
 
@@ -448,14 +436,22 @@ Therefore, the architectural choice dictates the data structure:
     \item \textbf{Use Pointer/Adjacency Lists for Transactional Workloads}: Streaming graphs, dynamic environments where topology changes rapidly and traversing the entire graph is less common than local updates.
 \end{itemize}
 
+\section{Measurement Caveats}
+
+The main limitation of this experiment is that the provided benchmark measures more than the isolated BFS inner loop. It includes graph loading, memory allocation, and in the CSR case, conversion from the pointer graph to CSR. This makes the experiment realistic for the provided driver, but it means the reported runtime is not a pure kernel microbenchmark. A pure traversal-only benchmark would likely make CSR look even better after conversion, because the one-time CSR construction cost would be excluded.
+
+Another caveat is that Cachegrind simulates cache behavior rather than measuring the exact physical cache behavior of the host CPU. This is useful because it gives deterministic miss counts and allows controlled changes to cache size, associativity, and line size. However, real processors also include features such as out-of-order execution, sophisticated prefetchers, TLBs, and memory-level parallelism. Therefore, Cachegrind results should be interpreted as strong evidence about memory-access patterns, not as a perfect model of every hardware effect.
+
+Finally, the generated Erd\H{o}s-R\'enyi graphs are only one class of graph. Graphs with different structure, such as road networks, grids, or power-law social graphs, may produce different frontier shapes and different \texttt{dist} array reuse patterns. Nevertheless, the main conclusion should remain stable: when the graph is mostly static and traversal-heavy, storing adjacency data contiguously gives the cache hierarchy much more useful work per memory access.
+
 \section{Conclusion}
 
-This report presents a detailed comparative analysis of Breadth-First Search implemented over Pointer-based and Compressed Sparse Row (CSR) graph representations. Through rigorous empirical benchmarking and Cachegrind profiling, we have conclusively demonstrated the profound impact of data layout on algorithm performance.
+This report presents a detailed comparative analysis of Breadth-First Search implemented over Pointer-based and Compressed Sparse Row (CSR) graph representations. Through rigorous empirical benchmarking and Cachegrind profiling, we have shown the profound impact of data layout on algorithm performance.
 
 Despite executing the identical abstract algorithm, the CSR implementation significantly outperformed the pointer-based approach, achieving speedups in excess of 2.4x on larger topologies. The underlying cause of this disparity is memory locality. The pointer-based graph's reliance on linked lists scattered across the heap induces severe pointer chasing, resulting in extremely poor cache line utilization and nearly 17 million Last-Level Cache misses on a 50,000-vertex graph.
 
-In stark contrast, the dense, contiguous arrays of the CSR format exploit spatial locality to near perfection. By ensuring that adjacent memory accesses map directly to adjacent logical data, CSR drastically reduces memory stalls, limits LLd misses to less than 5\% of the pointer implementation, and allows hardware prefetchers to operate efficiently. 
+In stark contrast, the dense, contiguous arrays of the CSR format exploit spatial locality to near perfection. By ensuring that adjacent memory accesses map directly to adjacent logical data, CSR greatly reduces memory stalls, limits LLd misses to less than 5\% of the pointer implementation, and allows hardware prefetchers to operate efficiently. 
 
-Ultimately, this assignment reinforces a cardinal rule of modern performance engineering: optimizing asymptotic complexity is necessary, but not sufficient. To unlock the true potential of modern hardware, data must be structured to respect the constraints and capabilities of the processor's memory hierarchy.
+Ultimately, this assignment reinforces a key principle of modern performance engineering: optimizing asymptotic complexity is necessary, but not sufficient. To unlock the true potential of modern hardware, data must be structured to respect the constraints and capabilities of the processor's memory hierarchy.
 
 \end{document}
