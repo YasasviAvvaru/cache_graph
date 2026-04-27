@@ -8,6 +8,7 @@
 \usepackage{hyperref}
 \usepackage{amsmath}
 \usepackage{float}
+\usepackage{graphicx}
 \usepackage{listings}
 \usepackage{xcolor}
 \usepackage{setspace}
@@ -302,6 +303,13 @@ This dramatic divergence can be explained by examining the inner loop. In the po
 
 Conversely, in the CSR format, a higher degree simply means a longer sequential scan over a contiguous slice of the \texttt{col\_idx} array. Modern hardware prefetchers thrive on long, uninterrupted sequential reads. The prefetcher detects the linear pattern and proactively loads upcoming cache lines from DRAM before the CPU even requests them. Thus, while the pointer graph suffers continuous latency stalls proportional to the degree, the CSR graph successfully pipelines the memory reads, keeping the computational units fully saturated. This provides definitive empirical evidence that CSR is exceptionally well-suited for dense graphs.
 
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{density_impact.pdf}
+    \caption{Impact of Graph Density on Execution Time for 50k Graph.}
+    \label{fig:density_impact}
+\end{figure}
+
 \section{Cache Behavior Analysis (Question 2)}
 
 To definitively prove that the runtime disparity is caused by memory access patterns, we turn to Cachegrind. We profiled the 50,000-node graph using a simulated cache hierarchy mirroring a typical modern processor: a 32 KB L1 Data Cache (8-way associative, 64-byte lines).
@@ -322,6 +330,13 @@ Pointer-based & 68,078,892 & 16,919,568 & 19.5\% & 4.8\% \\
 CSR-based     & 51,209,989 & 753,402    & 14.2\% & 0.2\% \\ \bottomrule
 \end{tabular}
 \end{table}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{cache_misses.pdf}
+    \caption{Cache Miss Comparison (L1 Data and Last-Level) for the 50k Graph.}
+    \label{fig:cache_misses}
+\end{figure}
 
 The most visually striking comparison is in the LLd column: the pointer version incurs nearly 17 million last-level misses, while CSR stays below 1 million. That gap is much larger than the D1 miss gap and explains why the runtime difference is so large.
 
@@ -408,6 +423,13 @@ This is the most revealing parameter sweep. We tested line sizes of 32 Bytes, 64
 \textbf{CSR LLd Misses} & 753,439 & 753,402 & 392,633 \\ \bottomrule
 \end{tabular}
 \end{table}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{line_size_impact.pdf}
+    \caption{Impact of Cache Line Size on L1 Data Misses for Pointer vs. CSR Layouts.}
+    \label{fig:line_size_impact}
+\end{figure}
 
 \textbf{Analysis}:
 Larger cache lines dramatically improve performance for both layouts, but for different reasons. For the Pointer implementation, fetching 128 bytes might accidentally bring in the next node in the linked list if the memory allocator happened to place them nearby, but it is largely fetching useless data, wasting bus bandwidth.
